@@ -54,9 +54,7 @@ class Model():
         for layer in reversed(self.layers):
             if layer.type == "Dense":
                 delta, dW, dB = layer.backward(delta)
-
-                layer.weights -= lr * dW
-                layer.bias -= lr * dB
+                layer.optimize(dW, dB, lr)
             else:
                 delta = layer.backward(delta)
 
@@ -169,6 +167,10 @@ class Dense():
         
         return delta, dW, dB
     
+    def optimize(self, dW, dB, lr):
+        self.weights -= lr * dW
+        self.bias -= lr * dB
+
     def get_name(self):
         return "Dense Layer"
 
