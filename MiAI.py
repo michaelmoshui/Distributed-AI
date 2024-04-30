@@ -54,6 +54,7 @@ class Model():
         for layer in reversed(self.layers):
             if layer.type == "Dense":
                 delta, dW, dB = layer.backward(delta)
+
                 layer.weights -= lr * dW
                 layer.bias -= lr * dB
             else:
@@ -164,7 +165,7 @@ class Dense():
         dW = np.matmul(delta.T, self.input) / delta.shape[0] 
         dB = np.sum(delta, axis=0) / delta.shape[0]
         
-        delta = np.einsum("ij, ni -> nj", self.weights, delta)
+        delta = np.dot(delta, self.weights)
         
         return delta, dW, dB
     
@@ -314,7 +315,6 @@ class BCE():
         '''
         self.real = real
         self.prediction = np.clip(prediction, 1e-15, 1 - 1e-15)
-        print(self.real.shape, self.prediction.shape)
         return -np.mean(np.add(np.multiply(self.real, np.log(self.prediction)), np.multiply((1 - self.real), np.log(1 - self.prediction))))
     
     def backward(self):
