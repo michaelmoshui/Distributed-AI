@@ -9,3 +9,4 @@ The purpose of this project is to explore distributed neural network training on
 ## To be completed (very general to be expanded):
 * Raspberry Pi Setup
 * Distriuted learning Pipeline
+* More advanced deep learning components (optimizers, normalization layers, etc...)
