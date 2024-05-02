@@ -290,6 +290,79 @@ class Sigmoid():
     def get_name(self):
         return "Sigmoid Activation Function"
 
+
+class BatchNorm():
+    def __init__(self, num_feature, eps=1e-5, momentum=0.1):
+        '''
+        Purpose:
+        ~ Normalize layer activations across the batch dimension
+
+        Attributes:
+        ~ self.type: BatchNorm
+        ~ self.output: (N, D) matrix, where D is the dimension of the input and output matrix
+        ~ self.momentum (float): determines the update scheme of the running statistics (mean and variance)
+        ~ self.num_feature (float): number of features/channels of the input and output
+        ~ self.eps (float): numerical correction for normalization calculation
+        ~ self.training (boolean): determines training vs. inference mode 
+        ~ self.gamma: (D,) learnable parameter for affine transformation
+        ~ self.beta: (D,) learnable parameter for affine transformation
+        '''
+        self.type = "BatchNorm"
+        self.output = None
+        self.momentum = momentum
+        self.num_feature = num_feature
+        self.eps = eps
+        self.training = True
+        self.num_feature = num_feature
+        
+        # Trainable parameters
+        self.gamma = np.random.randn(1, self.num_feature)
+        self.beta = np.random.randn(1, self.num_feature)
+
+        # Moving statistics
+        self.moving_mean = np.zeros((1, self.num_feature))
+        self.moving_variance = np.ones((1, self.num_feature))
+
+    def __call__(self, X):
+        '''
+        Purpose:
+        ~ forward pass of the Dense layer
+
+        Input:
+        ~ X: input sample batch of shape (batch_size, num_feature, spatial)
+        ~ spatial dimension is optional, and might have multiple dimensions
+        ~ in dense layers, there is no spatial dimension
+        ~ in convolution layers, spatial dimension consists of width and height
+
+        Output:
+        ~ self.output
+        ~ Same shape as input: (batch_size, num_feature, spatial)
+        '''
+
+        # Compute mean and variance of the mini-batch for each input feature
+        # Assume the input feature dimension is axis=1
+        batch_dim = tuple(j for j in range(X.ndim) if j != 1) 
+        batch_mean = np.mean(X, axis=batch_dim, keepdims=True) # (1, num_feature)
+        batch_variance = np.var(X, axis=batch_dim, keepdims=True) # (1, num_feature)
+
+        # Update meaning mean and variance
+        self.moving_mean = (1 - self.momentum)*self.moving_mean + self.momentum*batch_mean
+        self.moving_variance = (1 - self.momentum)*self.moving_variance + self.momentum*batch_variance
+        
+        # Forward pass for training vs. inference
+        if self.training:
+            X_norm = (X - batch_mean)/np.sqrt(batch_variance + self.eps)
+        else:
+            X_norm = (X - self.moving_mean)/np.sqrt(self.moving_variance + self.eps)
+        
+        return self.gamma * X_norm + self.beta
+
+    def backward(self, delta):
+        pass
+
+    def get_name(self):
+        return "Batch Normalization"
+
 ################
 # Lost Functions
 ################
