@@ -37,7 +37,7 @@ class Model():
         return x
     
     # backpropagation
-    def backprop(self, Loss, lr):
+    def backprop(self, Loss, Optimizer):
         '''
         Purpose:
         ~ update weights and biases through backpropagation
@@ -54,7 +54,7 @@ class Model():
         for layer in reversed(self.layers):
             if layer.type == "Dense":
                 delta, dW, dB = layer.backward(delta)
-                layer.optimize(dW, dB, lr)
+                layer.weights, layer.bias = Optimizer.optimize(layer.weights, dW, layer.bias, dB)
             else:
                 delta = layer.backward(delta)
 
@@ -166,10 +166,6 @@ class Dense():
         delta = np.dot(delta, self.weights)
         
         return delta, dW, dB
-    
-    def optimize(self, dW, dB, lr):
-        self.weights -= lr * dW
-        self.bias -= lr * dB
 
     def get_name(self):
         return "Dense Layer"
@@ -401,3 +397,18 @@ class BCE():
         ~ (N, D) matrix containing N samples of a N-dimensional label
         '''
         return -(self.real / self.prediction) + ((1 - self.real) / (1 - self.prediction))
+    
+############
+# Optimizers
+############
+
+# Gradient Descent
+class GD():
+    def __init__(self, lr):
+        self.lr = lr
+
+    def optimize(self, W, dW, B, dB):
+        return W - self.lr * dW, B - self.lr * dB
+    
+    def get_name():
+        return "Gradient Descent"

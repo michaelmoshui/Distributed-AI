@@ -62,6 +62,9 @@ model = ExampleMA()
 # Define binary crossentropy loss
 BCELoss = ma.BCE()
 
+# Define optimizer
+optimizer = ma.GD(0.01)
+
 # define training loop
 def train(X, Y, model, loss_fn, epochs=1000):
 
@@ -70,7 +73,7 @@ def train(X, Y, model, loss_fn, epochs=1000):
         output = model(X)
         loss = loss_fn(Y, output)
 
-        model.backprop(loss_fn, 0.01)
+        model.backprop(loss_fn, optimizer)
 
         if i % 50:
             print(f'Epoch {i} Loss: {loss}')
@@ -111,4 +114,3 @@ def plot_decision_boundary(X, y, model, steps=1000, cmap='Paired'):
     return fig, ax
 
 plot_decision_boundary(X, Y, model, cmap='RdBu')
-# %%
