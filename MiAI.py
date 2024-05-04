@@ -52,6 +52,7 @@ class Model():
         delta = Loss.backward()
 
         for layer in reversed(self.layers):
+            # backward prop fro Dense Layer
             if layer.type == "Dense":
                 # calculate delta and derivatives through backward pass
                 delta, dW, dB = layer.backward(delta)
@@ -104,7 +105,21 @@ class Model():
 #######################
 # Neural Network Layers
 #######################
-class Dense():
+class Layer():
+    def __init__(self):
+        self.type = None
+        self.otuput = None
+
+    def __call__(self, X):
+        pass
+
+    def backward(self, X):
+        pass
+
+    def get_name(self):
+        pass
+
+class Dense(Layer):
     def __init__(self, input_dim, output_dim, bias=True):
         '''
         Purpose:
@@ -128,6 +143,7 @@ class Dense():
         ~ self.params['W']: a (O, I) weight matrix; where O is output dimension and I is input dimension
         ~ self.params['B']: an (O,) vector; where O is output dimension
         '''
+        super().__init__()
         self.type = "Dense"
         
         self.bias = bias
@@ -136,7 +152,6 @@ class Dense():
         self.output_dim = output_dim
 
         self.input = None
-        self.output = None
         
         self.params = {'W': np.random.randn(self.output_dim, self.input_dim),
                        'B': np.random.randn(self.output_dim) if self.bias else None}
@@ -203,7 +218,7 @@ class Dense():
     def get_name(self):
         return "Dense Layer"
 
-class ReLU():
+class ReLU(Layer):
     def __init__(self):
         '''
         Purpose:
@@ -213,8 +228,8 @@ class ReLU():
         ~ self.type: ReLU
         ~ self.output: a (N, D) matrix, where D is the dimension of the input and output
         '''
+        super().__init__()
         self.type = "ReLU"
-        self.output = None
 
     def __call__(self, X):
         '''
@@ -247,7 +262,7 @@ class ReLU():
     def get_name(self):
         return "ReLU Activation Function"
 
-class Softmax():
+class Softmax(Layer):
     def __init__(self) -> None:
         '''
         Purpose:
@@ -257,8 +272,8 @@ class Softmax():
         ~ self.type: Softmax
         ~ self.output: a (N, D) matrix, where D is the dimension of the input and output
         '''
+        super().__init__()
         self.type = "Softmax"
-        self.output = None
 
     def __call__(self, X):
         '''
@@ -278,7 +293,7 @@ class Softmax():
     def get_name(self):
         return "Softmax Activation Function"
     
-class Sigmoid():
+class Sigmoid(Layer):
     def __init__(self) -> None:
         '''
         Purpose:
@@ -288,8 +303,8 @@ class Sigmoid():
         ~ self.type: Sigmoid
         ~ self.output: (N, D) matrix, where the columns are probability values between 0 and 1
         '''
+        super().__init__()
         self.type = "Sigmoid"
-        self.output = None
 
     def __call__(self, X):
         '''
@@ -319,7 +334,7 @@ class Sigmoid():
     def get_name(self):
         return "Sigmoid Activation Function"
 
-class BatchNorm():
+class BatchNorm(Layer):
     def __init__(self, num_feature, eps=1e-5, momentum=0.1):
         '''
         Purpose:
@@ -335,8 +350,8 @@ class BatchNorm():
         ~ self.gamma: (D,) learnable parameter for affine transformation
         ~ self.beta: (D,) learnable parameter for affine transformation
         '''
+        super().__init__()
         self.type = "BatchNorm"
-        self.output = None
         self.momentum = momentum
         self.num_feature = num_feature
         self.eps = eps
@@ -394,7 +409,12 @@ class BatchNorm():
 ################
 # Lost Functions
 ################
-class BCE():
+class Loss():
+    def __init__(self):
+        self.real = None
+        self.prediction = None
+
+class BCE(Loss):
     def __init__(self):
         '''
         Purpose:
@@ -404,9 +424,8 @@ class BCE():
         ~ self.real: (N, D) array of the real labels
         ~ self.prediction: (N, D) array of predictions made by the neural network
         '''
-        self.real = None
-        self.prediction = None
-
+        super().__init__()
+        
     def __call__(self, real, prediction):
         '''
         Purpose:
@@ -462,3 +481,6 @@ class RMSProp(Optimizer):
             layer.grads[weight_type] = np.sqrt(dW * dW)
         # update weights
         layer.params[weight_type] -= self.lr * dW / np.clip(layer.grads[weight_type], a_min=1e-15, a_max=None)
+
+    def get_name():
+        return "RMSProp Optimizer"
