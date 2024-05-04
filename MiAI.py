@@ -53,10 +53,29 @@ class Model():
 
         for layer in reversed(self.layers):
             if layer.type == "Dense":
+                # calculate delta and derivatives through backward pass
                 delta, dW, dB = layer.backward(delta)
-                layer.weights, layer.bias = Optimizer.optimize(layer.weights, dW, layer.bias, dB)
+                
+                # update the weights (at the same time update gradient based on optimizer type)
+                Optimizer.optimize(dW, 'W', layer)
+                Optimizer.optimize(dB, 'B', layer)
+
             else:
                 delta = layer.backward(delta)
+
+    # clear gradients
+    def clear_grad(self):
+        for layer in self.layers:
+            if layer.type == "Dense":
+                layer.grads = {'W': np.zeros((layer.output_dim, layer.input_dim)),
+                               'B': np.zeros(layer.output_dim) if layer.params['B'] else None}
+    
+    # clear paramenters
+    def clear_params(self):
+        for layer in self.layers:
+            if layer.type == "Dense":
+                layer.params = {'W': np.random.randn(layer.output_dim, layer.input_dim),
+                                'B': np.random.randn(layer.output_dim) if layer.params['B'] else None}
 
     # Summarize the network
     def summarize(self):
@@ -77,7 +96,7 @@ class Model():
                 print(layer.get_name())
             else:
                 print(layer.get_name())
-                print("Weights:", "(" + str(layer.weights.shape[0]) + ", " + str(layer.weights.shape[1]) + ")")
+                print("Weights:", "(" + str(layer.params['W'].shape[0]) + ", " + str(layer.params['B'].shape[1]) + ")")
             print("********************")
 
 #######################
@@ -101,15 +120,22 @@ class Dense():
         ~ self.type: Dense
         ~ self.input: a (N, I) input; where N is batch size and I is input dimension
         ~ self.output: a (N, O) output; where N is batch size and I is output dimension
-        ~ self.weights: a (O, I) weight matrix; where O is output dimension and I is input dimension
-        ~ self.bias: an (O,) vector; where O is output dimension
+        ~ self.params['W']: a (O, I) weight matrix; where O is output dimension and I is input dimension
+        ~ self.params['B']: an (O,) vector; where O is output dimension
         '''
         self.type = "Dense"
+        
+        self.input_dim = input_dim
+        self.output_dim = output_dim
+
         self.input = None
         self.output = None
         
-        self.weights = np.random.randn(output_dim, input_dim)
-        self.bias = np.random.randn(output_dim) if bias else None
+        self.params = {'W': np.random.randn(output_dim, input_dim),
+                       'B': np.random.randn(output_dim) if bias else None}
+
+        self.grads = {'W': None,
+                      'B': None}
                 
     # forward propagation
     def __call__(self, X):
@@ -128,13 +154,13 @@ class Dense():
         self.input = X
 
         # compute matrix multiplication Weight X Input for every one of the N input vectors
-        matrix_multiplication = np.einsum("ij, nj -> ni", self.weights, X)
+        matrix_multiplication = np.einsum("ij, nj -> ni", self.params['W'], X)
         
         # depending on wanting bias or not, add bias to every output vector
-        if self.bias is None:
+        if self.params['B'] is None:
             self.output = matrix_multiplication
         else:
-            self.output = matrix_multiplication + self.bias[np.newaxis, :]
+            self.output = matrix_multiplication + self.params['B'][np.newaxis, :]
 
         return self.output
         
@@ -153,17 +179,17 @@ class Dense():
         ~ has shape (N, I), where I is the input dimension of this Dense layer
         
         ~ dW: gradient matrix for weights in this layer
-        ~ has shape (O, I); same as self.weights
+        ~ has shape (O, I); same as self.params['W']
 
         ~ dB: gradient vector for bias term in this layer
-        ~ has shape (O,); same as self.bias
+        ~ has shape (O,); same as self.params['B']
         '''
         
         # compute dW with delta X input averaged over all N matrix multiplications
         dW = np.matmul(delta.T, self.input) / delta.shape[0] 
         dB = np.sum(delta, axis=0) / delta.shape[0]
         
-        delta = np.dot(delta, self.weights)
+        delta = np.dot(delta, self.params['W'])
         
         return delta, dW, dB
 
@@ -286,7 +312,6 @@ class Sigmoid():
     def get_name(self):
         return "Sigmoid Activation Function"
 
-
 class BatchNorm():
     def __init__(self, num_feature, eps=1e-5, momentum=0.1):
         '''
@@ -401,14 +426,32 @@ class BCE():
 ############
 # Optimizers
 ############
-
-# Gradient Descent
-class GD():
-    def __init__(self, lr):
+class Optimizer():
+    def __init__(self, lr = 0.01):
         self.lr = lr
 
-    def optimize(self, W, dW, B, dB):
-        return W - self.lr * dW, B - self.lr * dB
+# Gradient Descent
+class GD(Optimizer):
+    def __init__(self, lr = 0.01):
+        super().__init__(lr = lr)
+
+    def optimize(self, dW, weight_type, layer):
+        layer.grads[weight_type] = dW # update grad
+        layer.params[weight_type] -= self.lr * dW # gradient descent
     
     def get_name():
         return "Gradient Descent"
+    
+class RMSProp(Optimizer):
+    def __init__(self, lr = 0.01, beta = 0.9):
+        super().__init__(lr = lr)
+        self.beta = beta
+
+    def optimize(self, dW, weight_type, layer):
+        # update grad
+        if layer.grads[weight_type] is not None:
+            layer.grads[weight_type] = np.sqrt(self.beta * layer.grads[weight_type] + (1 - self.beta) * dW * dW) # update grad
+        else:
+            layer.grads[weight_type] = np.sqrt(dW * dW)
+        # update weights
+        layer.params[weight_type] -= self.lr * dW / np.clip(layer.grads[weight_type], a_min=1e-15, a_max=None)

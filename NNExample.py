@@ -66,7 +66,7 @@ BCELoss = ma.BCE()
 optimizer = ma.GD(0.01)
 
 # define training loop
-def train(X, Y, model, loss_fn, epochs=1000):
+def train(X, Y, model, loss_fn, epochs=100):
 
     for i in range(epochs):
         
@@ -81,7 +81,7 @@ def train(X, Y, model, loss_fn, epochs=1000):
 # %%
 '''Train the model'''
 
-train(X, Y, model, BCELoss, 10000)
+train(X, Y, model, BCELoss, 1000)
 
 # %%
 
@@ -114,3 +114,5 @@ def plot_decision_boundary(X, y, model, steps=1000, cmap='Paired'):
     return fig, ax
 
 plot_decision_boundary(X, Y, model, cmap='RdBu')
+
+# %%
