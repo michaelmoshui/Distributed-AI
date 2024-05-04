@@ -48,7 +48,7 @@ class ExampleMA(ma.Model):
     def __init__(self):
         super().__init__()
         self.layers = [
-            ma.Dense(2, 5),
+            ma.Dense(2, 5, bias=False),
             ma.ReLU(),
             ma.Dense(5, 16),
             ma.ReLU(),
@@ -81,7 +81,7 @@ def train(X, Y, model, loss_fn, epochs=100):
 # %%
 '''Train the model'''
 
-train(X, Y, model, BCELoss, 1000)
+train(X, Y, model, BCELoss, 2000)
 
 # %%
 

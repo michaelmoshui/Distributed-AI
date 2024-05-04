@@ -58,7 +58,9 @@ class Model():
                 
                 # update the weights (at the same time update gradient based on optimizer type)
                 Optimizer.optimize(dW, 'W', layer)
-                Optimizer.optimize(dB, 'B', layer)
+                
+                if layer.bias:
+                    Optimizer.optimize(dB, 'B', layer)
 
             else:
                 delta = layer.backward(delta)
@@ -118,6 +120,9 @@ class Dense():
 
         Attributes:
         ~ self.type: Dense
+        ~ self.bias: boolean; include bias term or not
+        ~ self.input_dim: input dimension
+        ~ self.output_dim: output dimension
         ~ self.input: a (N, I) input; where N is batch size and I is input dimension
         ~ self.output: a (N, O) output; where N is batch size and I is output dimension
         ~ self.params['W']: a (O, I) weight matrix; where O is output dimension and I is input dimension
@@ -125,14 +130,16 @@ class Dense():
         '''
         self.type = "Dense"
         
+        self.bias = bias
+
         self.input_dim = input_dim
         self.output_dim = output_dim
 
         self.input = None
         self.output = None
         
-        self.params = {'W': np.random.randn(output_dim, input_dim),
-                       'B': np.random.randn(output_dim) if bias else None}
+        self.params = {'W': np.random.randn(self.output_dim, self.input_dim),
+                       'B': np.random.randn(self.output_dim) if self.bias else None}
 
         self.grads = {'W': None,
                       'B': None}
@@ -157,7 +164,7 @@ class Dense():
         matrix_multiplication = np.einsum("ij, nj -> ni", self.params['W'], X)
         
         # depending on wanting bias or not, add bias to every output vector
-        if self.params['B'] is None:
+        if not self.bias:
             self.output = matrix_multiplication
         else:
             self.output = matrix_multiplication + self.params['B'][np.newaxis, :]
@@ -186,8 +193,8 @@ class Dense():
         '''
         
         # compute dW with delta X input averaged over all N matrix multiplications
-        dW = np.matmul(delta.T, self.input) / delta.shape[0] 
-        dB = np.sum(delta, axis=0) / delta.shape[0]
+        dW = np.matmul(delta.T, self.input) / delta.shape[0]
+        dB = np.sum(delta, axis=0) / delta.shape[0] if self.bias else None
         
         delta = np.dot(delta, self.params['W'])
         
