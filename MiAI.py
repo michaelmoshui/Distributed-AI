@@ -1,4 +1,5 @@
 import numpy as np
+from multiprocessing import Pool
 
 ##################
 # Model Definition
@@ -11,9 +12,16 @@ class Model():
         ~ Implementation in inherited classes
 
         Attributes:
+        ~ self.x: the input (and then transformed) of the function
         ~ self.layers: a list of neural network layers
+        ~ self.multi: train on multiple processes?
+        ~ self.processes: number of processes for training
         '''
+        self.x = None
         self.layers = []
+        self.multi = False
+        self.num_processes = 0
+        self.num_minibatch = 4
     
     # forward pass
     def __call__(self, x):
@@ -29,6 +37,22 @@ class Model():
         ~ prediction made by the neural network;
         ~ an ndarray of the shape N X O, where N is the size of the sample batch and O is the output dimension of the final layer
         '''
+        if self.multi:
+            N = x.shape[0]
+            partition_size = N // self.num_minibatch
+            partitions = [(i, min(N, i + partition_size)) for i in range(0, N, partition_size)]
+            
+            self.x = x # do this so that we don't have to pass in x to the processors, which takes more time
+            
+            with Pool(processes=self.num_processes) as pool:
+                all_results = pool.map(self.forward_multi, partitions)
+        
+            return np.concatenate(all_results, axis=0)
+        else:
+            return self.forward_single(x)
+        
+    # forward pass for single processor
+    def forward_single(self, x):
         for layer in self.layers:
             if layer.type == "Dense": # need input for dense layer only
                 layer.input = x
@@ -36,6 +60,18 @@ class Model():
             layer.output = x
         return x
     
+    # forward pass for multi processor
+    def forward_multi(self, partitions):
+        x = self.x[partitions[0]:partitions[1]] # partition the x
+        
+        for layer in self.layers:
+            if layer.type == "Dense": # need input for dense layer only
+                layer.input = x
+            x = layer(x)
+            layer.output = x
+
+        return x
+
     # backpropagation
     def backprop(self, Loss, Optimizer):
         '''
@@ -79,6 +115,12 @@ class Model():
             if layer.type == "Dense":
                 layer.params = {'W': np.random.randn(layer.output_dim, layer.input_dim),
                                 'B': np.random.randn(layer.output_dim) if layer.params['B'] else None}
+
+    # initiate training with multiple cores
+    def multiprocess(self, num_processes=None, num_minibatch=4):
+        self.multi = True
+        self.num_processes = num_processes
+        self.num_minibatch = num_minibatch
 
     # Summarize the network
     def summarize(self):
@@ -359,14 +401,20 @@ class BatchNorm(Layer):
         self.eps = eps
         self.training = True
         self.num_feature = num_feature
+        self.batch_dim = None
         
-        # Trainable parameters
-        self.gamma = np.random.randn(1, self.num_feature)
-        self.beta = np.random.randn(1, self.num_feature)
+        # Trainable parameters; Gamma and Beta
+        self.params = {'G': np.random.randn(1, self.num_feature),
+                       'B': np.random.randn(1, self.num_feature)}
+        
+        self.grads = {'G': None,
+                      'B': None}
 
         # Moving statistics
         self.moving_mean = np.zeros((1, self.num_feature))
         self.moving_variance = np.ones((1, self.num_feature))
+
+        self.cache = None
 
     def __call__(self, X):
         '''
@@ -386,25 +434,31 @@ class BatchNorm(Layer):
 
         # Compute mean and variance of the mini-batch for each input feature
         # Assume the input feature dimension is axis=1
-        batch_dim = tuple(j for j in range(X.ndim) if j != 1) 
-        batch_mean = np.mean(X, axis=batch_dim, keepdims=True) # (1, num_feature)
-        batch_variance = np.var(X, axis=batch_dim, keepdims=True) # (1, num_feature)
+        self.batch_dim = tuple(j for j in range(X.ndim) if j != 1) 
+        batch_mean = np.mean(X, axis=self.batch_dim, keepdims=True) # (1, num_feature)
+        batch_variance = np.var(X, axis=self.batch_dim, keepdims=True) # (1, num_feature)
 
-        # Update meaning mean and variance
+        # Update moving mean and variance
         self.moving_mean = (1 - self.momentum)*self.moving_mean + self.momentum*batch_mean
         self.moving_variance = (1 - self.momentum)*self.moving_variance + self.momentum*batch_variance
         
         # Forward pass for training vs. inference
         if self.training:
             X_norm = (X - batch_mean)/np.sqrt(batch_variance + self.eps)
+            self.cache = (X, X_norm, batch_mean, batch_variance)
         else:
             X_norm = (X - self.moving_mean)/np.sqrt(self.moving_variance + self.eps)
         
-        return self.gamma * X_norm + self.beta
+        return self.params['G'] * X_norm + self.params['B']
 
     def backward(self, delta):
-        pass
+        X, X_norm, batch_mean, batch_variance = self.cache
 
+        dG = np.sum(delta * X_norm, axis=self.batch_dim, keepdims=True)
+        dB = np.sum(delta, axis=self.batch_dim, keepdims=True)
+
+        dX_norm = delta * self.params['G']
+        
     def get_name(self):
         return "Batch Normalization"
 
@@ -500,6 +554,13 @@ class RMSProp(Optimizer):
 
     def get_name():
         return "RMSProp Optimizer"
+
+class Adam(Optimizer):
+    def __init__(self, lr=0.01):
+        super().__init__(lr)
+
+    def optimize(self, dW, weight_type, layer):
+        pass
     
 # Miscellaneous Functions
 def minmax_scale(data, min_val=0, max_val=1):

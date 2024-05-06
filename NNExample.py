@@ -114,9 +114,9 @@ model = ExampleMA()
 CCELoss = ma.CCE()
 
 # Define optimizer
-optimizer = ma.RMSProp(0.001, 0.9)
+optimizer = ma.RMSProp(0.0001, 0.9)
 
-training_losses, training_accuracies = train(X_train, y_train, model, CCELoss, 128, 50)
+training_losses, training_accuracies = train(X_train, y_train, model, CCELoss, 512, 500)
 
 # %%
 '''Visualize the result of training'''

@@ -5,8 +5,8 @@ if __name__ == "__main__":
     bn = MiAI.BatchNorm(2)
     # print(bn.gamma)
     # print(bn.beta)
-    bn.gamma = 1
-    bn.beta = 0
+    bn.params['G'] = 1
+    bn.params['B'] = 0
     X = np.random.randint(0, 5, size=(3, 2))
     # beta = np.array([[2,3]])
     print(X)
