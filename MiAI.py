@@ -283,12 +283,14 @@ class Softmax(Layer):
         Input and Output:
         ~ (N, D) matrix that gets transformed according to the softmax activation function definition
         '''
+
+        X = minmax_scale(X, -1, 1)
+
         self.output = np.divide(np.exp(X), np.sum(np.exp(X), axis=1)[:, np.newaxis])
         return self.output
     
-    # Not implemented yet!
     def backward(self, delta):
-        pass
+        return delta # this assumes that the gradient of CCE and Softmax is combined together
 
     def get_name(self):
         return "Softmax Activation Function"
@@ -448,7 +450,21 @@ class BCE(Loss):
         ~ (N, D) matrix containing N samples of a N-dimensional label
         '''
         return -(self.real / self.prediction) + ((1 - self.real) / (1 - self.prediction))
+
+class CCE(Loss):
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self ,real, prediction):
+        self.real = real
+        self.prediction = np.clip(prediction, 1e-15, 1 - 1e-15)
+        
+        return np.mean(-np.sum(self.real * np.log(self.prediction), axis=1))
     
+    def backward(self):
+        # Assumes softmax layer implemented
+        return self.prediction - self.real
+
 ############
 # Optimizers
 ############
@@ -484,3 +500,15 @@ class RMSProp(Optimizer):
 
     def get_name():
         return "RMSProp Optimizer"
+    
+# Miscellaneous Functions
+def minmax_scale(data, min_val=0, max_val=1):
+    # Calculate the min and max along axis 1, keep the dimensions for broadcasting
+    min_vals = np.min(data, axis=1, keepdims=True)
+    max_vals = np.max(data, axis=1, keepdims=True)
+
+    # Avoid division by zero in case of constant rows
+    scaled_data = np.where(max_vals - min_vals == 0, min_val,
+                           (max_val - min_val) * ((data - min_vals) / (max_vals - min_vals)) + min_val)
+
+    return scaled_data
