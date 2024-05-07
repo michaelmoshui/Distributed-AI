@@ -1,5 +1,6 @@
 import numpy as np
 from multiprocessing import Pool
+import gc
 
 ##################
 # Model Definition
@@ -63,7 +64,7 @@ class Model():
     # forward pass for multi processor
     def forward_multi(self, partitions):
         x = self.x[partitions[0]:partitions[1]] # partition the x
-        
+
         for layer in self.layers:
             if layer.type == "Dense": # need input for dense layer only
                 layer.input = x

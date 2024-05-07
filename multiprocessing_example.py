@@ -23,18 +23,17 @@ class ExampleMA(ma.Model):
 if __name__ == "__main__":
     X_train = np.ones((10000, 784))
 
-    model = ExampleMA()
-
     # Single processor
+    model = ExampleMA()
+    
     s = time.time()
     pred_1 = model(X_train)
     e = time.time()
 
     print("Duration of single processor:", e - s)
-
+    
     # Multi processor
     model = ExampleMA()
-    
     model.multiprocess(num_processes=12, num_minibatch=12)
 
     s = time.time()
