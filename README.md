@@ -13,6 +13,7 @@ The purpose of this project is to explore distributed neural network training on
 * Sample implementation
 * BatchNorm
 * RMSProp Optimizer
+* Multiprocessing training (in multirpocessing_example.py you will see a substantial speed up of ~11s to ~6s for the same computation!)
 
 ## To be completed (very general to be expanded):
 * Raspberry Pi Setup
