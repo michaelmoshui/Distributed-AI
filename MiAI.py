@@ -76,17 +76,26 @@ class Model():
             else:
                 delta = layer.backward(delta)
 
+    # training function
     def train(self, X, y, Loss, Optimizer):
-        
+        '''
+        ~ Both single-core and multi-core training
+        ~ Data parallelism
+        ~ Training loop does not update the input and output of each layer.
+        ~ need to do that in the __call__ function
+        '''
         if self.multi:
+            # partition inputs into different segments
             N = X.shape[0]
             partition_size = N // self.num_minibatch
             partitions = [(X[i:min(N, i + partition_size)], y[i:min(N, i + partition_size)]) for i in range(0, N, partition_size)]
 
+            # establish worker processes and send data to the different workers
             with Pool(processes=self.num_processes) as pool:
                 multi_train = partial(self.multi_train, Loss, Optimizer)
                 all_results = pool.map(multi_train, partitions) 
 
+            # get the mean of gradients and new weights as necessary
             for (i, layer) in enumerate(self.layers):
                 if layer.type == "Dense":
 
@@ -98,6 +107,7 @@ class Model():
         else:
             self.single_train(X, y, Loss, Optimizer)
 
+    # single processor training; forward and backward pass
     def single_train(self, X, y, loss_fn, Optimizer):
         
         for layer in self.layers:
@@ -123,6 +133,7 @@ class Model():
             else:
                 delta = layer.backward(delta)
         
+    # multiprocessor training; forward and backward pass on a minibatch
     def multi_train(self, loss_fn, Optimizer, partition):
         x, y = partition
         # forward pass
@@ -150,6 +161,7 @@ class Model():
                 delta = layer.backward(delta)
 
         return self.layers
+    
     # clear gradients
     def clear_grad(self):
         for layer in self.layers:
