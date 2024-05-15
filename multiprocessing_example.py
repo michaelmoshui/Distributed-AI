@@ -1,16 +1,13 @@
 import MiAI as ma
 import numpy as np
 import time
+from multiprocessing import Pool
 
 class ExampleMA(ma.Model):
     def __init__(self):
         super().__init__()
         self.layers = [
             ma.Dense(784, 1024),
-            ma.ReLU(),
-            ma.Dense(1024, 1024),
-            ma.ReLU(),
-            ma.Dense(1024, 1024),
             ma.ReLU(),
             ma.Dense(1024, 1024),
             ma.ReLU(),
@@ -22,22 +19,19 @@ class ExampleMA(ma.Model):
 
 if __name__ == "__main__":
     X_train = np.ones((10000, 784))
+    y_train = np.random.randn(10000, 10)
 
-    # Single processor
-    model = ExampleMA()
-    
-    s = time.time()
-    pred_1 = model(X_train)
-    e = time.time()
-
-    print("Duration of single processor:", e - s)
-    
     # Multi processor
     model = ExampleMA()
-    model.multiprocess(num_processes=12, num_minibatch=12)
+    loss = ma.CCE()
+    optim = ma.RMSProp(lr=0.05)
+    model.multiprocess(num_minibatch=12)
 
     s = time.time()
-    pred_2 = model(X_train)
+    model.train(X_train, y_train, loss, optim)
+    e = time.time()
+
+
     e = time.time()
 
     print("Duration of multi processor:", e - s)

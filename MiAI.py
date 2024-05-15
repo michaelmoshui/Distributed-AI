@@ -1,6 +1,7 @@
 import numpy as np
 from multiprocessing import Pool
 import gc
+from functools import partial
 
 ##################
 # Model Definition
@@ -38,39 +39,11 @@ class Model():
         ~ prediction made by the neural network;
         ~ an ndarray of the shape N X O, where N is the size of the sample batch and O is the output dimension of the final layer
         '''
-        if self.multi:
-            N = x.shape[0]
-            partition_size = N // self.num_minibatch
-            partitions = [(i, min(N, i + partition_size)) for i in range(0, N, partition_size)]
-            
-            self.x = x # do this so that we don't have to pass in x to the processors, which takes more time
-            
-            with Pool(processes=self.num_processes) as pool:
-                all_results = pool.map(self.forward_multi, partitions)
-        
-            return np.concatenate(all_results, axis=0)
-        else:
-            return self.forward_single(x)
-        
-    # forward pass for single processor
-    def forward_single(self, x):
         for layer in self.layers:
             if layer.type == "Dense": # need input for dense layer only
                 layer.input = x
             x = layer(x)
             layer.output = x
-        return x
-    
-    # forward pass for multi processor
-    def forward_multi(self, partitions):
-        x = self.x[partitions[0]:partitions[1]] # partition the x
-
-        for layer in self.layers:
-            if layer.type == "Dense": # need input for dense layer only
-                layer.input = x
-            x = layer(x)
-            layer.output = x
-
         return x
 
     # backpropagation
@@ -80,7 +53,7 @@ class Model():
         ~ update weights and biases through backpropagation
 
         Input:
-        ~ lr: learning rate
+        ~ Optimizer
         ~ Loss: loss function object 
 
         Output:
@@ -103,12 +76,86 @@ class Model():
             else:
                 delta = layer.backward(delta)
 
+    def train(self, X, y, Loss, Optimizer):
+        
+        if self.multi:
+            N = X.shape[0]
+            partition_size = N // self.num_minibatch
+            partitions = [(X[i:min(N, i + partition_size)], y[i:min(N, i + partition_size)]) for i in range(0, N, partition_size)]
+
+            with Pool(processes=self.num_processes) as pool:
+                multi_train = partial(self.multi_train, Loss, Optimizer)
+                all_results = pool.map(multi_train, partitions) 
+
+            for (i, layer) in enumerate(self.layers):
+                if layer.type == "Dense":
+
+                    layer.params['W'] = np.mean([process[i].params['W'] for process in all_results], axis=0)
+                    layer.params['B'] = np.mean([process[i].params['B'] for process in all_results], axis=0)
+                    layer.grads['W'] = np.mean([process[i].grads['W'] for process in all_results], axis=0)
+                    layer.grads['B'] = np.mean([process[i].grads['B'] for process in all_results], axis=0)
+                    
+        else:
+            self.single_train(X, y, Loss, Optimizer)
+
+    def single_train(self, X, y, loss_fn, Optimizer):
+        
+        for layer in self.layers:
+            if layer.type == "Dense": # need input for dense layer only
+                layer.input = X
+            X = layer(X)
+            layer.output = X
+
+        loss_fn(y, X)
+
+        delta = loss_fn.backward()
+
+        for layer in reversed(self.layers):
+            # backward prop fro Dense Layer
+            if layer.type == "Dense":
+                # calculate delta and derivatives through backward pass
+                delta, dW, dB = layer.backward(delta)
+                
+                # update the weights (at the same time update gradient based on optimizer type)
+                Optimizer.optimize(dW, 'W', layer)
+                if layer.bias:
+                    Optimizer.optimize(dB, 'B', layer)
+            else:
+                delta = layer.backward(delta)
+        
+    def multi_train(self, loss_fn, Optimizer, partition):
+        x, y = partition
+        # forward pass
+        for layer in self.layers:
+            if layer.type == "Dense": # need input for dense layer only
+                layer.input = x
+            x = layer(x)
+            layer.output = x
+
+        # backward pass
+        loss_fn(y, x)
+
+        delta = loss_fn.backward()
+        
+        for layer in reversed(self.layers):
+            if layer.type == "Dense":
+                # calculate delta and derivatives through backward pass
+                delta, dW, dB = layer.backward(delta)
+                
+                # update the weights (at the same time update gradient based on optimizer type)
+                Optimizer.optimize(dW, 'W', layer)
+                if layer.bias:
+                    Optimizer.optimize(dB, 'B', layer)
+            else:
+                delta = layer.backward(delta)
+
+        return self.layers
     # clear gradients
     def clear_grad(self):
         for layer in self.layers:
             if layer.type == "Dense":
                 layer.grads = {'W': np.zeros((layer.output_dim, layer.input_dim)),
-                               'B': np.zeros(layer.output_dim) if layer.params['B'] else None}
+                               'B': np.zeros(layer.output_dim) if layer.bias else None}
     
     # clear paramenters
     def clear_params(self):
@@ -379,6 +426,7 @@ class Sigmoid(Layer):
     def get_name(self):
         return "Sigmoid Activation Function"
 
+# backward pass not finished!
 class BatchNorm(Layer):
     def __init__(self, num_feature, eps=1e-5, momentum=0.1):
         '''
@@ -494,6 +542,8 @@ class BCE(Loss):
         '''
         self.real = real
         self.prediction = np.clip(prediction, 1e-15, 1 - 1e-15)
+
+    def calculate_loss(self):
         return -np.mean(np.add(np.multiply(self.real, np.log(self.prediction)), np.multiply((1 - self.real), np.log(1 - self.prediction))))
     
     def backward(self):
@@ -510,10 +560,11 @@ class CCE(Loss):
     def __init__(self):
         super().__init__()
 
-    def __call__(self ,real, prediction):
+    def __call__(self, real, prediction):
         self.real = real
         self.prediction = np.clip(prediction, 1e-15, 1 - 1e-15)
-        
+    
+    def calculate_loss(self):
         return np.mean(-np.sum(self.real * np.log(self.prediction), axis=1))
     
     def backward(self):
