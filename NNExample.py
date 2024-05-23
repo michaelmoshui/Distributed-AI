@@ -3,8 +3,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import MiAI as ma
-import math
 from sklearn.datasets import fetch_openml
+import time
 
 # %%
 '''Preparing for model training'''
@@ -13,13 +13,17 @@ class ExampleMA(ma.Model):
     def __init__(self):
         super().__init__()
         self.layers = [
-            ma.Dense(784, 1024),
+            ma.Conv2D(1, 32, (3, 3), (2,2)),
+            ma.Conv2D(32, 64, (5, 5)),
+            ma.Conv2D(64, 128, (7, 7)),
+            ma.Flatten(),
+            ma.Dense(1152, 1024),
             ma.ReLU(),
             ma.Dense(1024, 1024),
             ma.ReLU(),
-            ma.Dense(1024, 512),
+            ma.Dense(1024, 1024),
             ma.ReLU(),
-            ma.Dense(512, 10),
+            ma.Dense(1024, 10),
             ma.Softmax()
         ]
 
@@ -38,7 +42,7 @@ def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
     training_accuracies = []
 
     model.clear_grad()
-    model.multiprocess()
+    model.multiprocess(num_minibatch=4)
 
     for i in range(epochs):        
         random_indices = np.random.randint(0, len(X), batch_size)
@@ -52,9 +56,10 @@ def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
 
         batch_x = np.array(batch_x) / 255.0
         batch_y = np.eye(10)[np.array(batch_y).flatten().astype(int)]
- 
-        model.train(batch_x, batch_y, loss_fn, optimizer)
 
+        start = time.time()
+        model.train(batch_x, batch_y, loss_fn, optimizer)
+        end = time.time()
         output = model(batch_x)
 
         loss_fn(batch_y, output)
@@ -66,25 +71,24 @@ def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
         training_losses.append(training_loss)
         training_accuracies.append(training_accuracy)
 
-        print(f'Epoch {i} Training Loss: {training_loss}')
+        print(f'Epoch {i} Training Loss: {training_loss} Training Duration: {end - start}')
 
     return training_losses, training_accuracies
 
 # %%
-'''Train the model'''
-# Initialize model object
 if __name__ == "__main__":
-
     '''Data processing'''
     # fetch data
     mnist = fetch_openml('mnist_784', version=1)
 
     # Data and targets
-    X, y = np.array(mnist['data']), np.array(mnist['target']).reshape(-1, 1)
+    X, y = np.array(mnist['data']).reshape(-1, 1, 28, 28), np.array(mnist['target']).reshape(-1, 1)
 
-    # print shapes
-    print("X shape:", X.shape)
-    print("y shape:", y.shape)
+    # # random data inputs
+    # X, y = np.random.rand(500, 1, 28, 28), np.random.randint(0, 9, (500, 1))
+    # # print shapes
+    # print("X shape:", X.shape)
+    # print("y shape:", y.shape)
 
     # split into training and testing data
     X_train, X_test = X[:2 * len(X) // 3], X[2 * len(X) // 3:]
@@ -112,15 +116,21 @@ if __name__ == "__main__":
 
     plt.tight_layout()
     plt.show()
+
+    # %%
+    '''
+    initiate training
+    '''
+    # Define model
     model = ExampleMA()
 
     # Define binary crossentropy loss
     CCELoss = ma.CCE()
 
     # Define optimizer
-    optimizer = ma.RMSProp(0.0001, 0.9)
+    optimizer = ma.RMSProp(0.001, 0.9)
 
-    training_losses, training_accuracies = train(X_train, y_train, model, CCELoss, optimizer, 512, 100)
+    training_losses, training_accuracies = train(X_train, y_train, model, CCELoss, optimizer, 128, 100)
 
     # %%
     '''Visualize the result of training'''
@@ -160,4 +170,4 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-    # %%
+# %%

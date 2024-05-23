@@ -1,7 +1,7 @@
 import numpy as np
-from multiprocessing import Pool
-import gc
+from multiprocessing import Pool, shared_memory
 from functools import partial
+import time
 
 ##################
 # Model Definition
@@ -42,7 +42,9 @@ class Model():
         for layer in self.layers:
             if layer.type == "Dense": # need input for dense layer only
                 layer.input = x
+            
             x = layer(x)
+            
             layer.output = x
         return x
 
@@ -63,7 +65,7 @@ class Model():
 
         for layer in reversed(self.layers):
             # backward prop fro Dense Layer
-            if layer.type == "Dense":
+            if layer.type == "Dense" or layer.type == "conv2d":
                 # calculate delta and derivatives through backward pass
                 delta, dW, dB = layer.backward(delta)
                 
@@ -86,24 +88,42 @@ class Model():
         '''
         if self.multi:
             # partition inputs into different segments
+            partition_start = time.time()
             N = X.shape[0]
             partition_size = N // self.num_minibatch
             partitions = [(X[i:min(N, i + partition_size)], y[i:min(N, i + partition_size)]) for i in range(0, N, partition_size)]
+            partition_end = time.time()
 
             # establish worker processes and send data to the different workers
+            process_start = time.time()
             with Pool(processes=self.num_processes) as pool:
                 multi_train = partial(self.multi_train, Loss, Optimizer)
                 all_results = pool.map(multi_train, partitions) 
+            process_end = time.time()
 
             # get the mean of gradients and new weights as necessary
+            concat_start = time.time()
             for (i, layer) in enumerate(self.layers):
-                if layer.type == "Dense":
+                if layer.type == "Dense" or layer.type == "conv2d":
 
-                    layer.params['W'] = np.mean([process[i].params['W'] for process in all_results], axis=0)
-                    layer.params['B'] = np.mean([process[i].params['B'] for process in all_results], axis=0)
-                    layer.grads['W'] = np.mean([process[i].grads['W'] for process in all_results], axis=0)
-                    layer.grads['B'] = np.mean([process[i].grads['B'] for process in all_results], axis=0)
-                    
+                    layer.params['W'] = np.mean([process[0][i].params['W'] for process in all_results], axis=0)
+                    layer.params['B'] = np.mean([process[0][i].params['B'] for process in all_results], axis=0)
+                    layer.grads['W'] = np.mean([process[0][i].grads['W'] for process in all_results], axis=0)
+                    layer.grads['B'] = np.mean([process[0][i].grads['B'] for process in all_results], axis=0)
+            concat_end = time.time()
+
+            print("==============Timing Analysis=====================")
+            print("Partition duration:", partition_end - partition_start)
+            print("data transfers:")
+            for i in range(len(all_results)):
+                print("Process " + str(i) + ":", all_results[i][1] - process_start)
+            print("training durations:")
+            for i in range(len(all_results)):
+                print("Training " + str(i) + ":", all_results[i][2])
+            print("process duration:", process_end - process_start)
+            print("Collection duration:", concat_end - concat_start)
+            print("==================================================")
+
         else:
             self.single_train(X, y, Loss, Optimizer)
 
@@ -111,8 +131,9 @@ class Model():
     def single_train(self, X, y, loss_fn, Optimizer):
         
         for layer in self.layers:
-            if layer.type == "Dense": # need input for dense layer only
+            if layer.type == "Dense" or layer.type == "conv2d": # need input for dense layer only
                 layer.input = X
+            # print(x.shape)
             X = layer(X)
             layer.output = X
 
@@ -122,10 +143,10 @@ class Model():
 
         for layer in reversed(self.layers):
             # backward prop fro Dense Layer
-            if layer.type == "Dense":
+            if layer.type == "Dense" or layer.type == "conv2d":
                 # calculate delta and derivatives through backward pass
                 delta, dW, dB = layer.backward(delta)
-                
+
                 # update the weights (at the same time update gradient based on optimizer type)
                 Optimizer.optimize(dW, 'W', layer)
                 if layer.bias:
@@ -135,10 +156,12 @@ class Model():
         
     # multiprocessor training; forward and backward pass on a minibatch
     def multi_train(self, loss_fn, Optimizer, partition):
+
         x, y = partition
+        start_train = time.time()
         # forward pass
         for layer in self.layers:
-            if layer.type == "Dense": # need input for dense layer only
+            if layer.type == "Dense" or layer.type == "conv2d": # need input for dense layer only
                 layer.input = x
             x = layer(x)
             layer.output = x
@@ -149,7 +172,7 @@ class Model():
         delta = loss_fn.backward()
         
         for layer in reversed(self.layers):
-            if layer.type == "Dense":
+            if layer.type == "Dense" or layer.type == "conv2d":
                 # calculate delta and derivatives through backward pass
                 delta, dW, dB = layer.backward(delta)
                 
@@ -159,8 +182,10 @@ class Model():
                     Optimizer.optimize(dB, 'B', layer)
             else:
                 delta = layer.backward(delta)
+        
+        stop_train = time.time()
 
-        return self.layers
+        return self.layers, start_train, stop_train - start_train
     
     # clear gradients
     def clear_grad(self):
@@ -201,7 +226,7 @@ class Model():
                 print(layer.get_name())
             else:
                 print(layer.get_name())
-                print("Weights:", "(" + str(layer.params['W'].shape[0]) + ", " + str(layer.params['B'].shape[1]) + ")")
+                print("Trainable parameters:", str(layer.params['W'].size + layer.params['B'].size))
             print("********************")
 
 #######################
@@ -319,6 +344,152 @@ class Dense(Layer):
 
     def get_name(self):
         return "Dense Layer"
+
+class Conv2D(Layer):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=(1,1), padding=(0,0), dilation=(1,1), padding_value=0, use_bias=True):
+        super().__init__()
+        self.type = "conv2d"
+        self.stride = stride
+        self.padding = padding
+        self.bias = use_bias
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.dilation = dilation
+        
+        # Xavier initialization of weights
+        fan_in = self.in_channels * kernel_size[0] * kernel_size[1]
+        fan_out = self.out_channels * kernel_size[0] * kernel_size[1]
+        limit = np.sqrt(6 / (fan_in + fan_out))
+
+        self.params = {'W': np.random.uniform(-limit, limit, (self.out_channels, self.in_channels, kernel_size[0], kernel_size[1])),
+                       'B': np.ones((self.out_channels)) if self.bias else None}
+        
+        self.grads = {'W': np.zeros_like(self.params['W']),
+                      'B': np.zeros_like(self.params['B']) if self.bias else None}
+
+        self.padding_value = padding_value
+
+        self.input = None
+        self.output = None
+
+    def pad_input(self, image):
+        if self.padding != (0, 0):
+            return np.pad(image, ((0,0), (0,0), self.padding, self.padding), mode='constant', constant_values=self.padding_value)
+        else:
+            return image
+        
+    def shape_init(self, image):
+        new_height = (image.shape[2] - self.params['W'].shape[2]) // self.stride[0] + 1
+        new_width = (image.shape[3] - self.params['W'].shape[3]) // self.stride[1] + 1
+
+        res = np.zeros((image.shape[0], self.out_channels, new_height, new_width))
+        
+        return res, new_height, new_width
+    
+    def convolve(self, image):
+        
+        output, new_height, new_width = self.shape_init(image)
+        filter_height, filter_width = self.params['W'].shape[2], self.params['W'].shape[3]
+        
+        for i in range(0, new_height * self.stride[0], self.stride[0]):
+            for j in range(0, new_width * self.stride[1], self.stride[1]):
+                region = image[:, :, i:i+filter_height, j:j+filter_width]
+                if self.bias:    
+                    output[:, :, i // self.stride[0], j // self.stride[1]] = np.tensordot(region, self.params['W'], axes=([1, 2, 3], [1, 2, 3])) + self.params['B']
+                else:
+                    output[:, :, i // self.stride[0], j // self.stride[1]] = np.tensordot(region, self.params['W'], axes=([1, 2, 3], [1, 2, 3]))
+        return output
+    
+    def __call__(self, X):
+        self.input = self.pad_input(X)
+
+        self.output = self.convolve(self.input)
+        
+        return self.output
+    
+    def dilate_matrix(self, matrix, y_stride, x_stride):
+        
+        output_shape = (matrix.shape[0],
+                        matrix.shape[1],
+                        matrix.shape[2] * y_stride - (y_stride - 1),
+                        matrix.shape[3] * x_stride - (x_stride - 1))
+        
+        dilated = np.zeros(output_shape, dtype=matrix.dtype)
+
+        dilated[:, :, ::y_stride, ::x_stride] = matrix
+        return dilated, dilated.shape[2], dilated.shape[3]
+
+    def pad_and_dilate(self, matrix):
+        dilated_shape = (matrix.shape[0],
+                         matrix.shape[1],
+                         matrix.shape[2] * self.stride[0] - (self.stride[0] - 1),
+                         matrix.shape[3] * self.stride[0] - (self.stride[0] - 1))
+        
+        dilated = np.zeros(dilated_shape, dtype=matrix.dtype)
+
+        dilated[:, :, ::self.stride[0], ::self.stride[1]] = matrix
+
+        padding_height, padding_width = self.params['W'].shape[2] - 1, self.params['W'].shape[3] - 1
+        padded_shape = (dilated_shape[0],
+                        dilated_shape[1],
+                        dilated_shape[2] + 2 * padding_height,
+                        dilated_shape[3] + 2 * padding_width)
+        
+        padded = np.zeros(padded_shape, dtype=dilated.dtype)
+
+        padded[:, :, padding_height:padding_height+dilated_shape[2], padding_width:padding_width+dilated_shape[3]] = dilated
+
+        return padded
+
+    def backward(self, delta):
+        dout = np.zeros_like(self.input)
+
+        dW = np.zeros_like(self.grads['W'])
+        dB = np.sum(delta, axis=(0, 2, 3))
+
+        # self.input should be N, 2, 5, 5
+        # dW should be 128, 2, 3, 3
+        # dilated_gradient = N, 128, 3, 3
+
+        dilated_gradient, dilated_height, dilated_width = self.dilate_matrix(delta, self.stride[0], self.stride[1])
+        # comparing the two implementations....
+        # tensordot with a for loop sum is actually faster than using pure numpy with einsum
+
+        fs = time.time()
+        for n in range(self.input.shape[0]):
+            for i in range(dW.shape[2]):
+                for j in range(dW.shape[3]):
+                    region = self.input[n, :, i:i+dilated_height, j:j+dilated_width]
+                    conv = np.tensordot(dilated_gradient[n], region, axes=([-2,-1], [-2,-1]))
+                    dW[:, :, i, j] += conv
+        fe = time.time()
+        # print(fe - fs)
+
+        # temp = np.zeros_like(dW)
+
+        # es = time.time()
+        # for i in range(self.params['W'].shape[2]):
+        #     for j in range(self.params['W'].shape[3]):
+        #         region = self.input[:, :, i:i+dilated_height, j:j+dilated_width]
+        #         temp[:, :, i, j] = np.einsum('nfij,ncij->nfc', dilated_gradient, region).sum(axis=0)
+        # ee = time.time()
+
+        # print(ee - es)
+        padded_delta = self.pad_and_dilate(delta)
+
+        flipped_transposed_params = np.transpose(np.rot90(self.params['W'], 2, axes=(-2,-1)), axes=(1, 0, 2, 3))
+        
+        for n in range(delta.shape[0]):
+            for i in range(delta.shape[2] * self.stride[0]):
+                for j in range(delta.shape[3] * self.stride[1]):
+                    region = padded_delta[n, :, i:i+self.params['W'].shape[2], j:j+self.params['W'].shape[3]]
+                    dout[n, :, i, j] = np.tensordot(flipped_transposed_params, region, axes=([-3, -2, -1], [-3, -2, -1]))
+                    
+        return dout, dW, dB
+
+    def get_name(self):
+        return "Convolution 2D Layer"
+
 
 class ReLU(Layer):
     def __init__(self):
@@ -522,6 +693,18 @@ class BatchNorm(Layer):
         
     def get_name(self):
         return "Batch Normalization"
+
+class Flatten(Layer):
+    def __init__(self):
+        super().__init__()
+    
+    def __call__(self, X):
+        self.input = X
+        self.output = np.reshape(X, (X.shape[0], -1))
+        return self.output
+    
+    def backward(self, delta):
+        return np.reshape(delta, self.input.shape)
 
 ################
 # Lost Functions
