@@ -87,29 +87,48 @@ class Model():
         ~ need to do that in the __call__ function
         '''
         if self.multi:
+            self.y = y
+
             # partition inputs into different segments
             partition_start = time.time()
             N = X.shape[0]
             partition_size = N // self.num_minibatch
-            partitions = [(X[i:min(N, i + partition_size)], y[i:min(N, i + partition_size)]) for i in range(0, N, partition_size)]
+            partitions = [(i, min(N, i + partition_size)) for i in range(0, N, partition_size)]
             partition_end = time.time()
 
-            # establish worker processes and send data to the different workers
             process_start = time.time()
+            # Initialize shared memory
+            shm = shared_memory.SharedMemory(create=True, size=X.nbytes)
+            X_shared = np.ndarray(X.shape, dtype=X.dtype, buffer=shm.buf)
+            np.copyto(X_shared, X)
+            
+            # establish worker processes and send data to the different workers
+            
+            print("reached initialization")
             with Pool(processes=self.num_processes) as pool:
-                multi_train = partial(self.multi_train, Loss, Optimizer)
-                all_results = pool.map(multi_train, partitions) 
-            process_end = time.time()
+                multi_train = partial(self.multi_train,
+                                      Loss,
+                                      shm_name=shm.name,
+                                      shape=X.shape,
+                                      dtype=X.dtype)
+                all_results = pool.map(multi_train, partitions)
+                                    
+                # clean up shm
+                shm.close()
+                shm.unlink()
 
+            process_end = time.time()
             # get the mean of gradients and new weights as necessary
             concat_start = time.time()
             for (i, layer) in enumerate(self.layers):
                 if layer.type == "Dense" or layer.type == "conv2d":
+                    dW = np.mean([process[0][i]['dW'] for process in all_results], axis=0)
+                    Optimizer.optimize(dW, 'W', layer)
+                    
+                    if layer.bias:
+                        dB = np.mean([process[0][i]['dB'] for process in all_results], axis=0)
+                        Optimizer.optimize(dB, 'B', layer)
 
-                    layer.params['W'] = np.mean([process[0][i].params['W'] for process in all_results], axis=0)
-                    layer.params['B'] = np.mean([process[0][i].params['B'] for process in all_results], axis=0)
-                    layer.grads['W'] = np.mean([process[0][i].grads['W'] for process in all_results], axis=0)
-                    layer.grads['B'] = np.mean([process[0][i].grads['B'] for process in all_results], axis=0)
             concat_end = time.time()
 
             print("==============Timing Analysis=====================")
@@ -130,10 +149,11 @@ class Model():
     # single processor training; forward and backward pass
     def single_train(self, X, y, loss_fn, Optimizer):
         
+        start_train = time.time()
+
         for layer in self.layers:
             if layer.type == "Dense" or layer.type == "conv2d": # need input for dense layer only
                 layer.input = X
-            # print(x.shape)
             X = layer(X)
             layer.output = X
 
@@ -153,11 +173,25 @@ class Model():
                     Optimizer.optimize(dB, 'B', layer)
             else:
                 delta = layer.backward(delta)
+
+        end_train = time.time()
+
+        print("training duration:", end_train - start_train)
         
     # multiprocessor training; forward and backward pass on a minibatch
-    def multi_train(self, loss_fn, Optimizer, partition):
+    # using shared memory is marginally faster than creating separate copies of data
+    # 11.3s vs 12.3s over 10 training epochs
+    def multi_train(self, loss_fn, partition_indices, shm_name, shape, dtype):
+        start_idx, end_idx = partition_indices
 
-        x, y = partition
+        # Access the shared memory
+        existing_shm = shared_memory.SharedMemory(name=shm_name)
+        X_shared = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
+        
+        # Extract the partition from the shared memory
+        x = X_shared[start_idx:end_idx]
+        y = self.y[start_idx:end_idx]  # Assuming `self.y` is available to all processes
+
         start_train = time.time()
         # forward pass
         for layer in self.layers:
@@ -167,25 +201,26 @@ class Model():
             layer.output = x
 
         # backward pass
-        loss_fn(y, x)
+        weight_updates = [None] * len(self.layers)
 
+        loss_fn(y, x)
         delta = loss_fn.backward()
         
-        for layer in reversed(self.layers):
+        for i, layer in enumerate(reversed(self.layers)):
             if layer.type == "Dense" or layer.type == "conv2d":
                 # calculate delta and derivatives through backward pass
                 delta, dW, dB = layer.backward(delta)
                 
                 # update the weights (at the same time update gradient based on optimizer type)
-                Optimizer.optimize(dW, 'W', layer)
-                if layer.bias:
-                    Optimizer.optimize(dB, 'B', layer)
+                weight_updates[len(weight_updates) - 1 - i] = {'dW': dW, 'dB': dB}
             else:
                 delta = layer.backward(delta)
         
         stop_train = time.time()
 
-        return self.layers, start_train, stop_train - start_train
+        existing_shm.close()
+
+        return weight_updates, start_train, stop_train - start_train
     
     # clear gradients
     def clear_grad(self):
@@ -447,11 +482,8 @@ class Conv2D(Layer):
         dW = np.zeros_like(self.grads['W'])
         dB = np.sum(delta, axis=(0, 2, 3))
 
-        # self.input should be N, 2, 5, 5
-        # dW should be 128, 2, 3, 3
-        # dilated_gradient = N, 128, 3, 3
-
         dilated_gradient, dilated_height, dilated_width = self.dilate_matrix(delta, self.stride[0], self.stride[1])
+        
         # comparing the two implementations....
         # tensordot with a for loop sum is actually faster than using pure numpy with einsum
 
@@ -463,8 +495,6 @@ class Conv2D(Layer):
                     conv = np.tensordot(dilated_gradient[n], region, axes=([-2,-1], [-2,-1]))
                     dW[:, :, i, j] += conv
         fe = time.time()
-        # print(fe - fs)
-
         # temp = np.zeros_like(dW)
 
         # es = time.time()
@@ -474,7 +504,6 @@ class Conv2D(Layer):
         #         temp[:, :, i, j] = np.einsum('nfij,ncij->nfc', dilated_gradient, region).sum(axis=0)
         # ee = time.time()
 
-        # print(ee - es)
         padded_delta = self.pad_and_dilate(delta)
 
         flipped_transposed_params = np.transpose(np.rot90(self.params['W'], 2, axes=(-2,-1)), axes=(1, 0, 2, 3))
