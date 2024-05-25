@@ -2,6 +2,7 @@ import numpy as np
 from multiprocessing import Pool, shared_memory
 from functools import partial
 import time
+from TimingAnalysis import TimeAnalysis as TA
 
 ##################
 # Model Definition
@@ -87,24 +88,33 @@ class Model():
         ~ need to do that in the __call__ function
         '''
         if self.multi:
+            multi_train_ta = TA()
+
+            multi_train_ta.begin("Training")
+
             self.y = y
 
             # partition inputs into different segments
-            partition_start = time.time()
+            multi_train_ta.begin("Partition")
+            
             N = X.shape[0]
             partition_size = N // self.num_minibatch
             partitions = [(i, min(N, i + partition_size)) for i in range(0, N, partition_size)]
-            partition_end = time.time()
+            
+            multi_train_ta.end("Partition")
 
-            process_start = time.time()
             # Initialize shared memory
+            multi_train_ta.begin("Share Memory")
+
             shm = shared_memory.SharedMemory(create=True, size=X.nbytes)
             X_shared = np.ndarray(X.shape, dtype=X.dtype, buffer=shm.buf)
             np.copyto(X_shared, X)
             
-            # establish worker processes and send data to the different workers
+            multi_train_ta.end("Share Memory")
             
-            print("reached initialization")
+            # establish worker processes and send data to the different workers
+            multi_train_ta.begin("Worker Process")
+                     
             with Pool(processes=self.num_processes) as pool:
                 multi_train = partial(self.multi_train,
                                       Loss,
@@ -116,10 +126,12 @@ class Model():
                 # clean up shm
                 shm.close()
                 shm.unlink()
+            
+            multi_train_ta.end("Worker Process")
 
-            process_end = time.time()
             # get the mean of gradients and new weights as necessary
-            concat_start = time.time()
+            multi_train_ta.begin("Collection")
+
             for (i, layer) in enumerate(self.layers):
                 if layer.type == "Dense" or layer.type == "conv2d":
                     dW = np.mean([process[0][i]['dW'] for process in all_results], axis=0)
@@ -128,20 +140,12 @@ class Model():
                     if layer.bias:
                         dB = np.mean([process[0][i]['dB'] for process in all_results], axis=0)
                         Optimizer.optimize(dB, 'B', layer)
+            
+            multi_train_ta.end("Collection")
 
-            concat_end = time.time()
+            multi_train_ta.end("Training")
 
-            print("==============Timing Analysis=====================")
-            print("Partition duration:", partition_end - partition_start)
-            print("data transfers:")
-            for i in range(len(all_results)):
-                print("Process " + str(i) + ":", all_results[i][1] - process_start)
-            print("training durations:")
-            for i in range(len(all_results)):
-                print("Training " + str(i) + ":", all_results[i][2])
-            print("process duration:", process_end - process_start)
-            print("Collection duration:", concat_end - concat_start)
-            print("==================================================")
+            multi_train_ta.print_analysis()
 
         else:
             self.single_train(X, y, Loss, Optimizer)
