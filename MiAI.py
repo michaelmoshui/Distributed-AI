@@ -3,6 +3,7 @@ from multiprocessing import Pool, shared_memory
 from functools import partial
 import time
 from TimingAnalysis import TimeAnalysis as TA
+from mpi4py import MPI
 
 ##################
 # Model Definition
@@ -22,10 +23,18 @@ class Model():
         '''
         self.x = None
         self.layers = []
+
+        # multicore process
         self.multi = False
         self.num_processes = 0
         self.num_minibatch = 4
     
+        # cluster process
+        self.cluster = True
+        self.num_devices = 1
+        self.X = None
+        self.y = None
+
     # forward pass
     def __call__(self, x):
         '''
@@ -150,6 +159,130 @@ class Model():
         else:
             self.single_train(X, y, Loss, Optimizer)
 
+    def cluster_train(self, loss_fn, Optimizer, batch_size=64):
+        # generate batches
+        mini_batchsize = batch_size // self.num_devices
+        random_indices = np.random.randint(0, len(self.X), mini_batchsize)
+
+        batch_x_shape = (mini_batchsize,) + self.X.shape[1:]
+        batch_x = np.empty(batch_x_shape, dtype=np.float32)
+
+        batch_y_shape = (mini_batchsize,) + self.y.shape[1:]
+        batch_y = np.empty(batch_y_shape, dtype=self.y.dtype)
+
+        for i, index in enumerate(random_indices):
+            batch_x[i] = self.X[index]
+            batch_y[i] = self.y[index]
+
+        # start forward pass
+        for layer in self.layers:
+            if layer.type == "Dense" or layer.type == "conv2d": # need input for dense layer only
+                layer.input = batch_x
+            batch_x = layer(batch_x)
+            layer.output = batch_x
+        
+        # calculate loss
+        loss_fn(batch_y, batch_x)
+
+        # start backward pass
+        delta = loss_fn.backward()
+
+        for layer in reversed(self.layers):
+            if layer.type == "Dense" or layer.type == "conv2d":
+                # calculate delta and derivatives through backward pass
+                delta, dW, dB = layer.backward(delta)
+
+                # update the weights (at the same time update gradient based on optimizer type)
+                Optimizer.optimize(dW, 'W', layer)
+                if layer.bias:
+                    Optimizer.optimize(dB, 'B', layer)
+            else:
+                delta = layer.backward(delta)
+
+        # ring all reduce algorithm to communicate gradients with each other
+        num_layers = len(self.layers) // self.num_devices
+
+        send_partition = self.rank
+        receive_partition = (self.rank - 1 + self.num_devices) % self.num_devices
+        
+        # can probably optimize with sending numpy arrays later
+        # scatter reduce
+        for _ in range(self.num_devices - 1):
+            
+            # send functions
+            send_indices = [send_partition * num_layers,
+                            min(send_partition * num_layers + num_layers, len(self.layers))]
+            
+            sent_data = self.comm.isend(self.layers[send_indices[0]:send_indices[1]],
+                                   dest=(send_partition + 1) % self.num_devices)
+            
+            # receive functions
+            receive_indices = [receive_partition * num_layers,
+                               min(receive_partition * num_layers + num_layers, len(self.layers))]
+            
+            received_data = self.comm.irecv(source=receive_partition)
+            
+            received_data = received_data.wait()
+
+            for i, layer in enumerate(self.layers[receive_indices[0]:receive_indices[1]]):
+                if layer.type == "Dense" or layer.type == "conv2d":
+
+                    layer.params['W'] += received_data[i].params['W']
+                    layer.params['B'] += received_data[i].params['B']
+
+                    layer.grads['W'] += received_data[i].grads['W']
+                    layer.grads['B'] += received_data[i].grads['B']
+
+            sent_data.wait() # wait on sent_data in case it's not finished yet
+
+            # update sending and receiving partition
+            send_partition = receive_partition
+            receive_partition = (send_partition - 1 + self.num_devices) % self.num_devices
+
+        # all gather
+        for _ in range(self.num_devices - 1):
+
+            # send functions
+            send_indices = [send_partition * num_layers,
+                            min(send_partition * num_layers + num_layers, len(self.layers))]
+            
+            sent_data = self.comm.isend(self.layers[send_indices[0]:send_indices[1]],
+                                   dest=(send_partition + 1) % self.num_devices)
+            
+            # receive functions
+            receive_indices = [receive_partition * num_layers,
+                               min(receive_partition * num_layers + num_layers, len(self.layers))]
+            
+            received_data = self.comm.irecv(source=receive_partition)
+            
+            received_data = received_data.wait()
+
+            for i, layer in enumerate(self.layers[receive_indices[0]:receive_indices[1]]):
+                if layer.type == "Dense" or layer.type == "conv2d":
+
+                    layer.params['W'] = received_data[i].params['W']
+                    layer.params['B'] = received_data[i].params['B']
+
+                    layer.grads['W'] = received_data[i].grads['W']
+                    layer.grads['B'] = received_data[i].grads['B']
+
+            sent_data.wait() # wait on sent_data in case it's not finished yet
+
+            # update sending and receiving partition
+            send_partition = receive_partition
+            receive_partition = (send_partition - 1 + self.num_devices) % self.num_devices
+
+        # take the mean
+        for layer in self.layers:
+            if layer.type == "Dense" or layer.type == "conv2d":
+                layer.params['W'] /= self.num_devices
+                layer.params['B'] /= self.num_devices
+                layer.grads['W'] /= self.num_devices
+                layer.grads['B'] /= self.num_devices
+
+
+
+
     # single processor training; forward and backward pass
     def single_train(self, X, y, loss_fn, Optimizer):
         
@@ -246,6 +379,15 @@ class Model():
         self.num_processes = num_processes
         self.num_minibatch = num_minibatch
 
+    def cluster_init(self, X, y, num_devices=4):
+        self.cluster = True
+        self.X = X
+        self.y = y
+        self.num_devices = num_devices
+
+        self.comm = MPI.COMM_WORLD
+        self.rank = self.comm.Get_rank()
+
     # Summarize the network
     def summarize(self):
         '''
@@ -319,8 +461,8 @@ class Dense(Layer):
 
         self.input = None
         
-        self.params = {'W': np.random.randn(self.output_dim, self.input_dim),
-                       'B': np.random.randn(self.output_dim) if self.bias else None}
+        self.params = {'W': np.random.randn(self.output_dim, self.input_dim).astype(np.float32),
+                       'B': np.random.randn(self.output_dim).astype(np.float32) if self.bias else None}
 
         self.grads = {'W': None,
                       'B': None}
@@ -400,8 +542,8 @@ class Conv2D(Layer):
         fan_out = self.out_channels * kernel_size[0] * kernel_size[1]
         limit = np.sqrt(6 / (fan_in + fan_out))
 
-        self.params = {'W': np.random.uniform(-limit, limit, (self.out_channels, self.in_channels, kernel_size[0], kernel_size[1])),
-                       'B': np.ones((self.out_channels)) if self.bias else None}
+        self.params = {'W': np.random.uniform(-limit, limit, (self.out_channels, self.in_channels, kernel_size[0], kernel_size[1])).astype(np.float32),
+                       'B': np.ones((self.out_channels)).astype(np.float32) if self.bias else None}
         
         self.grads = {'W': np.zeros_like(self.params['W']),
                       'B': np.zeros_like(self.params['B']) if self.bias else None}

@@ -5,6 +5,7 @@ import numpy as np
 import MiAI as ma
 from sklearn.datasets import fetch_openml
 import time
+import multiprocessing
 
 # %%
 '''Preparing for model training'''
@@ -36,11 +37,12 @@ def calculate_accuracy(real, prediction):
 # define training loop
 def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
 
+    multiprocessing.set_start_method('spawn')
     training_losses = []
     training_accuracies = []
     avg_times = []
     model.clear_grad()
-    model.multiprocess(num_minibatch=8)
+    # model.multiprocess(num_minibatch=8)
 
     for i in range(epochs):        
         random_indices = np.random.randint(0, len(X), batch_size)
@@ -56,7 +58,7 @@ def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
         batch_y = np.eye(10)[np.array(batch_y).flatten().astype(int)]
 
         start = time.time()
-        model.train(batch_x, batch_y, loss_fn, optimizer)
+        model.train(batch_x.astype(np.float32), batch_y, loss_fn, optimizer)
         end = time.time()
         avg_times.append(end - start)
         output = model(batch_x)
