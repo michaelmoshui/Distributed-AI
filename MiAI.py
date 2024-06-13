@@ -51,7 +51,7 @@ class Model():
         ~ an ndarray of the shape N X O, where N is the size of the sample batch and O is the output dimension of the final layer
         '''
         for layer in self.layers:
-            if layer.type == "Dense": # need input for dense layer only
+            if layer.type == "Dense" or layer.type == "conv2d": # need input for dense layer only
                 layer.input = x
             
             x = layer(x)
@@ -301,8 +301,8 @@ class Model():
         print("training duration:", end_train - start_train)
         
     # multiprocessor training; forward and backward pass on a minibatch
-    # using shared memory is marginally faster than creating separate copies of data
-    # 11.3s vs 12.3s over 10 training epochs
+    # using folkserver is fast on Linux
+    # using folk is even faster initiation, but often times not enough space to allocate resources
     def multi_train(self, loss_fn, partition):
         x, y = partition
 
