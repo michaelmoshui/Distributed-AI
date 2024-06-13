@@ -1,5 +1,6 @@
 import numpy as np
-from multiprocessing import Pool, shared_memory
+from multiprocessing import Pool
+import multiprocessing as mp
 from functools import partial
 import time
 from TimingAnalysis import TimeAnalysis as TA
@@ -108,33 +109,17 @@ class Model():
             
             N = X.shape[0]
             partition_size = N // self.num_minibatch
-            partitions = [(i, min(N, i + partition_size)) for i in range(0, N, partition_size)]
+            partitions = [(X[i:min(N, i + partition_size)], y[i:min(N, i + partition_size)]) for i in range(0, N, partition_size)]
             
             multi_train_ta.end("Partition")
-
-            # Initialize shared memory
-            multi_train_ta.begin("Share Memory")
-
-            shm = shared_memory.SharedMemory(create=True, size=X.nbytes)
-            X_shared = np.ndarray(X.shape, dtype=X.dtype, buffer=shm.buf)
-            np.copyto(X_shared, X)
-            
-            multi_train_ta.end("Share Memory")
             
             # establish worker processes and send data to the different workers
             multi_train_ta.begin("Worker Process")
                      
             with Pool(processes=self.num_processes) as pool:
                 multi_train = partial(self.multi_train,
-                                      Loss,
-                                      shm_name=shm.name,
-                                      shape=X.shape,
-                                      dtype=X.dtype)
+                                      Loss)
                 all_results = pool.map(multi_train, partitions)
-                                    
-                # clean up shm
-                shm.close()
-                shm.unlink()
             
             multi_train_ta.end("Worker Process")
 
@@ -318,16 +303,8 @@ class Model():
     # multiprocessor training; forward and backward pass on a minibatch
     # using shared memory is marginally faster than creating separate copies of data
     # 11.3s vs 12.3s over 10 training epochs
-    def multi_train(self, loss_fn, partition_indices, shm_name, shape, dtype):
-        start_idx, end_idx = partition_indices
-
-        # Access the shared memory
-        existing_shm = shared_memory.SharedMemory(name=shm_name)
-        X_shared = np.ndarray(shape, dtype=dtype, buffer=existing_shm.buf)
-        
-        # Extract the partition from the shared memory
-        x = X_shared[start_idx:end_idx]
-        y = self.y[start_idx:end_idx]  # Assuming `self.y` is available to all processes
+    def multi_train(self, loss_fn, partition):
+        x, y = partition
 
         start_train = time.time()
         # forward pass
@@ -355,8 +332,6 @@ class Model():
         
         stop_train = time.time()
 
-        existing_shm.close()
-
         return weight_updates, start_train, stop_train - start_train
     
     # clear gradients
@@ -378,6 +353,7 @@ class Model():
         self.multi = True
         self.num_processes = num_processes
         self.num_minibatch = num_minibatch
+        mp.set_start_method('forkserver')
 
     def cluster_init(self, X, y, num_devices=4):
         self.cluster = True

@@ -37,12 +37,11 @@ def calculate_accuracy(real, prediction):
 # define training loop
 def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
 
-    multiprocessing.set_start_method('spawn')
     training_losses = []
     training_accuracies = []
     avg_times = []
     model.clear_grad()
-    # model.multiprocess(num_minibatch=8)
+    model.multiprocess(num_minibatch=8)
 
     for i in range(epochs):        
         random_indices = np.random.randint(0, len(X), batch_size)
@@ -80,17 +79,17 @@ def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
 # %%
 if __name__ == "__main__":
     '''Data processing'''
-    # fetch data
-    mnist = fetch_openml('mnist_784', version=1)
+    # # fetch data
+    # mnist = fetch_openml('mnist_784', version=1)
 
-    # Data and targets
-    X, y = np.array(mnist['data']).reshape(-1, 1, 28, 28), np.array(mnist['target']).reshape(-1, 1)
+    # # Data and targets
+    # X, y = np.array(mnist['data']).reshape(-1, 1, 28, 28), np.array(mnist['target']).reshape(-1, 1)
 
-    # # random data inputs
-    # X, y = np.random.rand(500, 1, 28, 28), np.random.randint(0, 9, (500, 1))
-    # # print shapes
-    # print("X shape:", X.shape)
-    # print("y shape:", y.shape)
+    # random data inputs
+    X, y = np.random.rand(500, 1, 28, 28), np.random.randint(0, 9, (500, 1))
+    # print shapes
+    print("X shape:", X.shape)
+    print("y shape:", y.shape)
 
     # split into training and testing data
     X_train, X_test = X[:2 * len(X) // 3], X[2 * len(X) // 3:]
