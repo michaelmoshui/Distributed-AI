@@ -145,6 +145,12 @@ class Model():
             self.single_train(X, y, Loss, Optimizer)
 
     def cluster_train(self, loss_fn, Optimizer, batch_size=64):
+        # open up the asynchronous receive channels in computer 0
+        if self.rank == 0:
+            from_one = self.comm.irecv(source=1, tag=1)
+            from_two = self.comm.irecv(source=2, tag=2)
+            from_three = self.comm.irecv(source=3, tag=3)
+
         # generate batches
         mini_batchsize = batch_size // self.num_devices
         random_indices = np.random.randint(0, len(self.X), mini_batchsize)
@@ -183,6 +189,33 @@ class Model():
                     Optimizer.optimize(dB, 'B', layer)
             else:
                 delta = layer.backward(delta)
+
+        if self.rank == 0:
+            from_one = from_one.wait()
+            from_two = from_two.wait()
+            from_three = from_three.wait()
+
+            for i in range(len(self.layers)):
+                if self.layers[i].type == "Dense" or self.layers[i].type == "conv2d":
+                    self.layers[i].params['W'] = np.sum([self.layers[i].params['W'],
+                                                         from_one[i].params['W'],
+                                                         from_two[i].params['W'],
+                                                         from_three[i].params['W']], axis=0) / 4
+                    self.layers[i].params['B'] = np.sum([self.layers[i].params['B'],
+                                                         from_one[i].params['B'],
+                                                         from_two[i].params['B'],
+                                                         from_three[i].params['B']], axis=0) / 4
+                    self.layers[i].grads['W'] = np.sum([self.layers[i].grads['W'],
+                                                         from_one[i].grads['W'],
+                                                         from_two[i].grads['W'],
+                                                         from_three[i].grads['W']], axis=0) / 4
+                    self.layers[i].grads['B'] = np.sum([self.layers[i].grads['B'],
+                                                         from_one[i].grads['B'],
+                                                         from_two[i].grads['B'],
+                                                         from_three[i].grads['B']], axis=0) / 4
+        else:
+            send_layer = self.comm.isend(self.layers, dest=0, tag=self.rank)
+            send_layer.wait()
 
         # ring all reduce algorithm to communicate gradients with each other
         num_layers = len(self.layers) // self.num_devices

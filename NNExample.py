@@ -5,7 +5,6 @@ import numpy as np
 import MiAI as ma
 from sklearn.datasets import fetch_openml
 import time
-import multiprocessing
 
 # %%
 '''Preparing for model training'''
@@ -41,7 +40,7 @@ def train(X, y, model, loss_fn, optimizer, batch_size, epochs=100):
     training_accuracies = []
     avg_times = []
     model.clear_grad()
-    model.multiprocess(num_minibatch=8)
+    # model.multiprocess(num_minibatch=8)
 
     for i in range(epochs):        
         random_indices = np.random.randint(0, len(X), batch_size)
